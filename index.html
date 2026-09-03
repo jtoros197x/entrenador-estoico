@@ -92,20 +92,42 @@ function ghConfig() {
   let repo = localStorage.getItem("estoico:ghRepo");
   if (!token) {
     token = window.prompt("Pega tu GitHub Personal Access Token (permiso 'Contents: Read and write' sobre este repositorio):");
-    if (token) localStorage.setItem("estoico:ghToken", token);
+    if (token) { token = token.trim(); localStorage.setItem("estoico:ghToken", token); }
   }
   if (!owner) {
     owner = window.prompt("Usuario/organización dueño del repositorio (ej. jtoros197x):");
-    if (owner) localStorage.setItem("estoico:ghOwner", owner);
+    if (owner) { owner = owner.trim(); localStorage.setItem("estoico:ghOwner", owner); }
   }
   if (!repo) {
     repo = window.prompt("Nombre del repositorio (ej. entrenador-estoico):");
-    if (repo) localStorage.setItem("estoico:ghRepo", repo);
+    if (repo) { repo = repo.trim(); localStorage.setItem("estoico:ghRepo", repo); }
   }
-  return { token, owner, repo };
+  return { token: token && token.trim(), owner: owner && owner.trim(), repo: repo && repo.trim() };
 }
 function resetGhConfig() {
   ["ghToken", "ghOwner", "ghRepo"].forEach((k) => localStorage.removeItem("estoico:" + k));
+}
+// Verifies the token can actually see this specific repo — unlike reading a
+// data file (which 404s the same way for "wrong repo" and "file doesn't
+// exist yet"), this endpoint 404s only when owner/repo/token access is wrong.
+async function ghCheckRepo() {
+  const { token, owner, repo } = ghConfig();
+  if (!token || !owner || !repo) return { ok: false, error: "Falta configurar GitHub (token/usuario/repo)." };
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+    });
+    if (res.status === 404) return { ok: false, error: `No se encontró el repositorio "${owner}/${repo}" con este token. Revisa que el usuario y el nombre del repo estén escritos exactamente igual, y que el token tenga acceso a ese repo.` };
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "El token no es válido o no tiene permiso sobre este repositorio." };
+    if (!res.ok) return { ok: false, error: `GitHub respondió ${res.status}` };
+    const data = await res.json();
+    if (data.permissions && data.permissions.push === false) {
+      return { ok: false, error: "El token tiene acceso de solo lectura a este repo — necesita permiso 'Contents: Read and write'." };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message || "Error de red" };
+  }
 }
 function utf8ToBase64(str) { return btoa(unescape(encodeURIComponent(str))); }
 function base64ToUtf8(str) { return decodeURIComponent(escape(atob(str.replace(/\n/g, "")))); }
@@ -366,26 +388,18 @@ function App() {
   const [labs, setLabs] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [syncOk, setSyncOk] = useState(null); // null = checking, true/false after first load
+  const [syncError, setSyncError] = useState("");
 
   useEffect(() => {
     (async () => {
-      let ok = true;
-      const safe = async (key) => {
-        try {
-          const before = localStorage.getItem("estoico:" + key);
-          const val = await loadAll(key, []);
-          const after = localStorage.getItem("estoico:" + key);
-          if (before === after && before === null) { /* still nothing, inconclusive */ }
-          return val;
-        } catch { ok = false; return []; }
-      };
       const [c, m, a, met, l] = await Promise.all([
         loadAll("checkins", []), loadAll("meals", []), loadAll("activities", []), loadAll("metrics", []), loadAll("labs", []),
       ]);
       setCheckins(c); setMeals(m); setActivities(a); setMetrics(met); setLabs(l);
       setLoaded(true);
-      // quick probe to know if GitHub sync is actually reachable right now
-      try { await ghGetFile("data/checkins.json"); setSyncOk(true); } catch { setSyncOk(false); }
+      const check = await ghCheckRepo();
+      setSyncOk(check.ok);
+      setSyncError(check.ok ? "" : check.error);
     })();
   }, []);
 
@@ -412,12 +426,15 @@ function App() {
           <div style={S.kicker}>disciplina estoica</div>
           <h1 style={S.h1}>Entrenador</h1>
         </div>
-        <div style={{ textAlign: "right" }}>
+        <div style={{ textAlign: "right", maxWidth: 220 }}>
           <div style={S.dateBadge}>{fmtDate(todayISO())}</div>
           <button onClick={() => { resetGhConfig(); ghConfig(); window.location.reload(); }}
             style={{ background: "none", border: "none", padding: 0, marginTop: 4, fontSize: 11, color: syncOk ? C.verdigris : C.rust, cursor: "pointer", fontFamily: F.sans, display: "block", marginLeft: "auto" }}>
-            {syncOk === null ? "verificando sincronización…" : syncOk ? "☁ sincronizado con GitHub" : "⚠ sin sincronizar — toca para configurar"}
+            {syncOk === null ? "verificando sincronización…" : syncOk ? "☁ sincronizado con GitHub" : "⚠ sin sincronizar — toca para reconfigurar"}
           </button>
+          {syncOk === false && syncError && (
+            <div style={{ fontSize: 10.5, color: C.rust, marginTop: 2, lineHeight: 1.4 }}>{syncError}</div>
+          )}
           <button onClick={() => { resetApiCreds(); alert("Credenciales de API borradas. La próxima foto que subas te las pedirá de nuevo."); }}
             style={{ background: "none", border: "none", padding: 0, marginTop: 2, fontSize: 11, color: C.slate, cursor: "pointer", fontFamily: F.sans, display: "block", marginLeft: "auto" }}>
             restablecer API key
