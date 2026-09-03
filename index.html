@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Entrenador Estoico</title>
+<link rel="icon" href="data:,">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Entrenador">
+<meta name="theme-color" content="#211F1C">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .spin { animation: spin 1s linear infinite; display:inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 560px) {
+    .grid2 { grid-template-columns: 1fr !important; }
+  }
+  input, textarea, button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+
+const { useState, useEffect, useRef } = React;
+
+// ---------- design tokens ----------
+const C = {
+  ink: "#211F1C", stone: "#EDE8DC", stoneLine: "#D9D2C2", panel: "#F7F4EC",
+  slate: "#6B6558", bronze: "#8C6A4F", verdigris: "#5C7A6E", rust: "#A6462F",
+};
+const F = { serif: "'Source Serif 4', Georgia, serif", sans: "'IBM Plex Sans', system-ui, sans-serif" };
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const fmtDate = (iso) => {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
+};
+
+const VIRTUES = [
+  { key: "templanza", label: "Templanza", desc: "moderación frente al impulso" },
+  { key: "disciplina", label: "Disciplina", desc: "hacer lo debido, no lo cómodo" },
+  { key: "coraje", label: "Coraje", desc: "actuar pese a la resistencia" },
+  { key: "sabiduria", label: "Sabiduría", desc: "juicio claro antes de reaccionar" },
+];
+
+// ---------- local persistence (browser localStorage — this is YOUR device only) ----------
+function loadAll(key, fallback) {
+  try {
+    const raw = localStorage.getItem("estoico:" + key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
+}
+function saveAll(key, value) {
+  try { localStorage.setItem("estoico:" + key, JSON.stringify(value)); } catch (e) { console.error(e); }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+// NOTE: vision/API analysis requires an Anthropic API key you provide yourself
+// when hosted outside claude.ai (unlike inside a Claude artifact, this static
+// page has no built-in model access). Ask for a key once and store it locally.
+function getApiKey() {
+  let k = localStorage.getItem("estoico:apiKey");
+  if (!k) {
+    k = window.prompt("Pega tu API key de Anthropic para habilitar el análisis de fotos (se guarda solo en este navegador):");
+    if (k) localStorage.setItem("estoico:apiKey", k);
+  }
+  return k;
+}
+
+async function claudeVision(base64, mediaType, prompt) {
+  const key = getApiKey();
+  if (!key) throw new Error("no-key");
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+        { type: "text", text: prompt },
+      ]}],
+    }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || "error API");
+  return (data.content || []).filter(c => c.type === "text").map(c => c.text).join("\n");
+}
+
+let pdfJsLoadPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (pdfJsLoadPromise) return pdfJsLoadPromise;
+  pdfJsLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js";
+    script.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+      resolve(window.pdfjsLib);
+    };
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return pdfJsLoadPromise;
+}
+
+async function pdfToImages(file, maxPages = 3) {
+  const pdfjsLib = await loadPdfJs();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const n = Math.min(pdf.numPages, maxPages);
+  const images = [];
+  for (let i = 1; i <= n; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    images.push(canvas.toDataURL("image/png").split(",")[1]);
+  }
+  return images;
+}
+
+function parseLabJson(text) {
+  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+const LAB_EXTRACT_PROMPT = `Esta imagen es un resultado de laboratorio clínico. Extrae cada marcador/analito que encuentres. Responde ÚNICAMENTE con un array JSON, sin texto adicional, sin markdown, con este formato exacto:
+[{"marker":"nombre del marcador","value":numero,"unit":"unidad","low":numero o null,"high":numero o null}]
+Usa el rango de referencia impreso en el reporte para low/high. Si un marcador no tiene rango de referencia visible, usa null. Si no logras leer ningún marcador, responde con [].`;
+
+// ---------- simple SVG charts (no external chart lib needed) ----------
+function LineChartSVG({ data, valueKey, color, height = 160 }) {
+  if (!data || data.length < 2) return <p style={S.empty}>Registra al menos dos días para ver la tendencia.</p>;
+  const w = 600, h = height, pad = 30;
+  const vals = data.map(d => d[valueKey]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max - min || 1;
+  const stepX = (w - pad * 2) / (data.length - 1);
+  const pts = data.map((d, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - ((d[valueKey] - min) / range) * (h - pad * 2);
+    return [x, y];
+  });
+  const path = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0] + "," + p[1]).join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height }}>
+      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke={C.stoneLine} />
+      <path d={path} fill="none" stroke={color} strokeWidth="2.5" />
+      {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r="3.5" fill={color} />)}
+      {data.map((d, i) => (
+        i % Math.ceil(data.length / 6 || 1) === 0 &&
+        <text key={i} x={pad + i * stepX} y={h - 8} fontSize="10" fill={C.slate} textAnchor="middle">{d.date}</text>
+      ))}
+    </svg>
+  );
+}
+
+function BarChartSVG({ data, valueKey, color, height = 160, maxVal }) {
+  if (!data || data.length === 0) return <p style={S.empty}>Sin datos todavía.</p>;
+  const w = 600, h = height, pad = 30;
+  const max = maxVal || Math.max(...data.map(d => d[valueKey]), 1);
+  const barW = (w - pad * 2) / data.length * 0.6;
+  const step = (w - pad * 2) / data.length;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height }}>
+      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke={C.stoneLine} />
+      {data.map((d, i) => {
+        const barH = (d[valueKey] / max) * (h - pad * 2);
+        const x = pad + i * step + (step - barW) / 2;
+        const y = h - pad - barH;
+        return <rect key={i} x={x} y={y} width={barW} height={barH} fill={color} rx="2" />;
+      })}
+      {data.map((d, i) => (
+        i % Math.ceil(data.length / 7 || 1) === 0 &&
+        <text key={i} x={pad + i * step + step / 2} y={h - 8} fontSize="9.5" fill={C.slate} textAnchor="middle">{d.date}</text>
+      ))}
+    </svg>
+  );
+}
+
+// ---------- icons (tiny inline svg, no lib needed) ----------
+const Icon = ({ children, size = 16, color = "currentColor" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+);
+const IconSunrise = (p) => <Icon {...p}><path d="M17 18a5 5 0 0 0-10 0"/><line x1="12" y1="2" x2="12" y2="9"/><line x1="4.22" y1="10.22" x2="5.64" y2="11.64"/><line x1="1" y1="18" x2="3" y2="18"/><line x1="21" y1="18" x2="23" y2="18"/><line x1="18.36" y1="11.64" x2="19.78" y2="10.22"/><line x1="23" y1="22" x2="1" y2="22"/><polyline points="8 6 12 2 16 6"/></Icon>;
+const IconMoon = (p) => <Icon {...p}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></Icon>;
+const IconMeal = (p) => <Icon {...p}><path d="M3 2v7c0 1.1.9 2 2 2h1a2 2 0 0 0 2-2V2"/><path d="M6 11v11"/><path d="M18 2c-1.1 0-2 1.9-2 5v7a2 2 0 0 0 2 2v6"/></Icon>;
+const IconActivity = (p) => <Icon {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></Icon>;
+const IconLab = (p) => <Icon {...p}><path d="M9 2v6l-6 10a2 2 0 0 0 2 3h14a2 2 0 0 0 2-3l-6-10V2"/><line x1="8.5" y1="2" x2="15.5" y2="2"/></Icon>;
+const IconTrend = (p) => <Icon {...p}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></Icon>;
+const IconCheck = (p) => <Icon {...p}><polyline points="20 6 9 17 4 12"/></Icon>;
+const IconX = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Icon>;
+const IconUpload = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>;
+const IconCamera = (p) => <Icon {...p}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></Icon>;
+const IconFlame = (p) => <Icon {...p}><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></Icon>;
+const IconChevron = (p) => <Icon {...p}><polyline points="9 18 15 12 9 6"/></Icon>;
+const IconLoader = (p) => <Icon {...p}><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></Icon>;
+
+// ---------- App shell ----------
+function App() {
+  const [tab, setTab] = useState("hoy");
+  const [checkins, setCheckins] = useState(() => loadAll("checkins", []));
+  const [meals, setMeals] = useState(() => loadAll("meals", []));
+  const [activities, setActivities] = useState(() => loadAll("activities", []));
+  const [metrics, setMetrics] = useState(() => loadAll("metrics", []));
+  const [labs, setLabs] = useState(() => loadAll("labs", []));
+
+  const tabs = [
+    { key: "hoy", label: "Hoy", Icon: IconSunrise },
+    { key: "comidas", label: "Comidas", Icon: IconMeal },
+    { key: "actividad", label: "Actividad", Icon: IconActivity },
+    { key: "progreso", label: "Progreso", Icon: IconTrend },
+    { key: "examenes", label: "Exámenes", Icon: IconLab },
+  ];
+
+  return (
+    <div style={S.page}>
+      <header style={S.header}>
+        <div>
+          <div style={S.kicker}>disciplina estoica</div>
+          <h1 style={S.h1}>Entrenador</h1>
+        </div>
+        <div style={S.dateBadge}>{fmtDate(todayISO())}</div>
+      </header>
+
+      <nav style={S.nav}>
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }}>
+              <t.Icon size={15} />
+              {t.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      <main style={S.main}>
+        {tab === "hoy" && <Hoy checkins={checkins} setCheckins={setCheckins} />}
+        {tab === "comidas" && <Comidas meals={meals} setMeals={setMeals} />}
+        {tab === "actividad" && <ActividadTab activities={activities} setActivities={setActivities} />}
+        {tab === "progreso" && <Progreso checkins={checkins} metrics={metrics} setMetrics={setMetrics} />}
+        {tab === "examenes" && <Examenes labs={labs} setLabs={setLabs} />}
+      </main>
+    </div>
+  );
+}
+
+// ---------- Hoy ----------
+function Hoy({ checkins, setCheckins }) {
+  const today = todayISO();
+  const existing = checkins.find((c) => c.date === today) || {
+    date: today, virtue: "", mealPlan: "", exercisePlan: "", morningDone: false,
+    eveningWentWell: "", eveningFailed: "", eveningFix: "", eveningDone: false,
+  };
+  const [form, setForm] = useState(existing);
+
+  const persist = (next) => {
+    const others = checkins.filter((c) => c.date !== today);
+    const updated = [...others, next].sort((a, b) => a.date.localeCompare(b.date));
+    setCheckins(updated);
+    saveAll("checkins", updated);
+    setForm(next);
+  };
+
+  const streak = (() => {
+    let s = 0;
+    let cursor = new Date();
+    const map = Object.fromEntries(checkins.map(c => [c.date, c]));
+    for (;;) {
+      const iso = cursor.toISOString().slice(0, 10);
+      const c = map[iso];
+      if (c && (c.morningDone || c.eveningDone)) { s++; cursor.setDate(cursor.getDate() - 1); }
+      else break;
+    }
+    return s;
+  })();
+
+  return (
+    <div className="grid2" style={S.grid2}>
+      <section style={S.card}>
+        <div style={S.cardHead}><IconSunrise size={16} color={C.bronze} /><span>Check-in de la mañana</span></div>
+        <label style={S.label}>Virtud del día</label>
+        <div style={S.virtueRow}>
+          {VIRTUES.map((v) => (
+            <button key={v.key} onClick={() => setForm({ ...form, virtue: v.key })} title={v.desc}
+              style={{ ...S.virtueChip, ...(form.virtue === v.key ? S.virtueChipActive : {}) }}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+        <label style={S.label}>Plan de comidas de hoy</label>
+        <textarea style={S.textarea} rows={2} value={form.mealPlan} onChange={(e) => setForm({ ...form, mealPlan: e.target.value })} placeholder="Sin azúcar añadida ni frituras" />
+        <label style={S.label}>Bloque de ejercicio de hoy</label>
+        <textarea style={S.textarea} rows={2} value={form.exercisePlan} onChange={(e) => setForm({ ...form, exercisePlan: e.target.value })} placeholder="Fuerza / cardio, duración" />
+        <button style={S.primaryBtn} onClick={() => persist({ ...form, morningDone: true })}><IconCheck size={14} /> Registrar mañana</button>
+      </section>
+
+      <section style={S.card}>
+        <div style={S.cardHead}><IconMoon size={16} color={C.bronze} /><span>Revisión de la noche</span></div>
+        <label style={S.label}>Qué hiciste bien</label>
+        <textarea style={S.textarea} rows={2} value={form.eveningWentWell} onChange={(e) => setForm({ ...form, eveningWentWell: e.target.value })} />
+        <label style={S.label}>Dónde fallaste — sin excusas</label>
+        <textarea style={S.textarea} rows={2} value={form.eveningFailed} onChange={(e) => setForm({ ...form, eveningFailed: e.target.value })} />
+        <label style={S.label}>Qué corriges mañana</label>
+        <textarea style={S.textarea} rows={2} value={form.eveningFix} onChange={(e) => setForm({ ...form, eveningFix: e.target.value })} />
+        <button style={S.primaryBtn} onClick={() => persist({ ...form, eveningDone: true })}><IconCheck size={14} /> Cerrar el día</button>
+      </section>
+
+      <section style={{ ...S.card, gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 14 }}>
+        <IconFlame size={20} color={C.rust} />
+        <div>
+          <div style={{ fontSize: 22, fontFamily: F.serif, color: C.ink }}>{streak} {streak === 1 ? "día" : "días"}</div>
+          <div style={{ fontSize: 12.5, color: C.slate }}>de racha activa — un check-in perdido la reinicia</div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ---------- Comidas ----------
+function Comidas({ meals, setMeals }) {
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const analysis = await claudeVision(base64, file.type || "image/jpeg",
+        "Analiza esta foto de comida. Responde en español, breve: 1) qué alimentos identificas, 2) calidad nutricional aproximada (alta/media/baja) y por qué, 3) si hay azúcares añadidos o frituras, 4) una sugerencia de mejora. Texto plano.");
+      const entry = { id: Date.now(), date: todayISO(), analysis };
+      const updated = [entry, ...meals];
+      setMeals(updated); saveAll("meals", updated);
+    } catch (err) {
+      alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo analizar la foto: " + err.message);
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div>
+      <section style={S.card}>
+        <div style={S.cardHead}><IconCamera size={16} color={C.bronze} /><span>Sube una foto de tu comida</span></div>
+        <p style={{ fontSize: 13, color: C.slate, marginTop: -4 }}>Se analiza al momento — no se guarda la imagen, solo el resultado.</p>
+        <input ref={inputRef} type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} id="meal-upload" />
+        <label htmlFor="meal-upload" style={{ ...S.primaryBtn, cursor: "pointer", width: "fit-content" }}>
+          {busy ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
+          {busy ? "Analizando…" : "Subir foto"}
+        </label>
+      </section>
+      <div style={{ marginTop: 18 }}>
+        {meals.length === 0 && <p style={S.empty}>Aún no hay comidas registradas.</p>}
+        {meals.map((m) => (
+          <section key={m.id} style={{ ...S.card, marginBottom: 10 }}>
+            <div style={S.mealDate}>{fmtDate(m.date)}</div>
+            <p style={{ fontSize: 14, color: C.ink, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.analysis}</p>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Actividad ----------
+function ActividadTab({ activities, setActivities }) {
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  const onScreenshot = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const analysis = await claudeVision(base64, file.type || "image/jpeg",
+        "Captura de una app de salud (Garmin o Google Health). Extrae en español: pasos, frecuencia cardiaca, horas de sueño, calorías activas, actividad registrada con duración. Si un dato no aparece dilo. Texto plano.");
+      const entry = { id: Date.now(), date: todayISO(), source: "pantallazo", summary: analysis };
+      const updated = [entry, ...activities];
+      setActivities(updated); saveAll("activities", updated);
+    } catch (err) {
+      alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo leer la captura: " + err.message);
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div>
+      <section style={S.card}>
+        <div style={S.cardHead}><IconActivity size={16} color={C.bronze} /><span>Registrar por pantallazo</span></div>
+        <p style={{ fontSize: 13, color: C.slate, marginTop: -4 }}>
+          Sube captura de Garmin Connect o Google Health. (La sincronización directa con Strava vive en la versión dentro de Claude — aquí, fuera de Claude, no hay conexión automática a servicios de terceros.)
+        </p>
+        <input ref={inputRef} type="file" accept="image/*" onChange={onScreenshot} style={{ display: "none" }} id="act-upload" />
+        <label htmlFor="act-upload" style={{ ...S.primaryBtn, cursor: "pointer", width: "fit-content" }}>
+          {busy ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
+          {busy ? "Leyendo…" : "Subir captura"}
+        </label>
+      </section>
+      <div style={{ marginTop: 18 }}>
+        {activities.length === 0 && <p style={S.empty}>Aún no hay actividad registrada.</p>}
+        {activities.map((a) => (
+          <section key={a.id} style={{ ...S.card, marginBottom: 10 }}>
+            <div style={S.mealDate}>{fmtDate(a.date)} · {a.source}</div>
+            <p style={{ fontSize: 14, color: C.ink, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{a.summary}</p>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Progreso ----------
+function Progreso({ checkins, metrics, setMetrics }) {
+  const [weight, setWeight] = useState("");
+  const addWeight = () => {
+    if (!weight) return;
+    const entry = { date: todayISO(), weight: parseFloat(weight) };
+    const others = metrics.filter((m) => m.date !== entry.date);
+    const updated = [...others, entry].sort((a, b) => a.date.localeCompare(b.date));
+    setMetrics(updated); saveAll("metrics", updated);
+    setWeight("");
+  };
+  const last14 = [...checkins].sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
+  const adherence = last14.map((c) => ({ date: c.date.slice(5), cumplido: (c.morningDone ? 1 : 0) + (c.eveningDone ? 1 : 0) }));
+  const weightData = metrics.map((m) => ({ date: m.date.slice(5), weight: m.weight }));
+
+  return (
+    <div>
+      <section style={S.card}>
+        <div style={S.cardHead}><IconTrend size={16} color={C.bronze} /><span>Peso</span></div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input style={S.input} type="number" step="0.1" placeholder="kg hoy" value={weight} onChange={(e) => setWeight(e.target.value)} />
+          <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={addWeight}>Guardar</button>
+        </div>
+        <LineChartSVG data={weightData} valueKey="weight" color={C.bronze} />
+      </section>
+      <section style={{ ...S.card, marginTop: 14 }}>
+        <div style={S.cardHead}><IconCheck size={16} color={C.bronze} /><span>Adherencia — últimos 14 días</span></div>
+        <BarChartSVG data={adherence} valueKey="cumplido" color={C.verdigris} maxVal={2} />
+      </section>
+    </div>
+  );
+}
+
+// ---------- Exámenes ----------
+function Examenes({ labs, setLabs }) {
+  const [form, setForm] = useState({ marker: "", value: "", unit: "", low: "", high: "" });
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(null);
+  const inputRef = useRef(null);
+
+  const add = () => {
+    if (!form.marker || !form.value) return;
+    const entry = { id: Date.now(), date: todayISO(), marker: form.marker, value: parseFloat(form.value), unit: form.unit,
+      low: form.low ? parseFloat(form.low) : null, high: form.high ? parseFloat(form.high) : null };
+    const updated = [entry, ...labs];
+    setLabs(updated); saveAll("labs", updated);
+    setForm({ marker: "", value: "", unit: "", low: "", high: "" });
+  };
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true); setPending(null);
+    try {
+      let images = [];
+      if (file.type === "application/pdf") {
+        images = await pdfToImages(file);
+      } else {
+        images = [await fileToBase64(file)];
+      }
+      let allMarkers = [];
+      for (const img of images) {
+        const text = await claudeVision(img, file.type === "application/pdf" ? "image/png" : (file.type || "image/jpeg"), LAB_EXTRACT_PROMPT);
+        allMarkers = allMarkers.concat(parseLabJson(text));
+      }
+      if (allMarkers.length === 0) {
+        alert("No se pudo leer ningún marcador. Intenta con una imagen más clara o agrégalo manualmente.");
+      } else {
+        setPending(allMarkers);
+      }
+    } catch (err) {
+      alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo procesar el archivo: " + err.message);
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  const confirmPending = () => {
+    const date = todayISO();
+    const entries = pending.map((m, i) => ({ id: Date.now() + i, date, marker: m.marker, value: m.value, unit: m.unit || "", low: m.low ?? null, high: m.high ?? null }));
+    const updated = [...entries, ...labs];
+    setLabs(updated); saveAll("labs", updated);
+    setPending(null);
+  };
+
+  const outOfRange = (l) => (l.low != null && l.value < l.low) || (l.high != null && l.value > l.high);
+
+  return (
+    <div>
+      <section style={S.card}>
+        <div style={S.cardHead}><IconLab size={16} color={C.bronze} /><span>Subir examen (imagen o PDF)</span></div>
+        <p style={{ fontSize: 13, color: C.slate, marginTop: -4 }}>Se leen automáticamente los marcadores y sus rangos de referencia.</p>
+        <input ref={inputRef} type="file" accept="image/*,application/pdf" onChange={onFile} style={{ display: "none" }} id="lab-upload" />
+        <label htmlFor="lab-upload" style={{ ...S.primaryBtn, cursor: "pointer", width: "fit-content" }}>
+          {busy ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
+          {busy ? "Leyendo…" : "Subir examen"}
+        </label>
+        {pending && (
+          <div style={{ marginTop: 14, borderTop: `1px solid ${C.stoneLine}`, paddingTop: 12 }}>
+            <p style={{ fontSize: 13, color: C.slate, marginBottom: 8 }}>Se detectaron {pending.length} marcador(es). Revisa antes de guardar:</p>
+            {pending.map((m, i) => (
+              <div key={i} style={{ fontSize: 13.5, color: C.ink, marginBottom: 4 }}>
+                {m.marker}: <strong>{m.value} {m.unit}</strong>{(m.low != null || m.high != null) ? ` (rango ${m.low ?? "–"}–${m.high ?? "–"})` : ""}
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={confirmPending}><IconCheck size={14} /> Guardar todos</button>
+              <button style={{ ...S.primaryBtn, marginTop: 0, background: "transparent", color: C.slate, border: `1px solid ${C.stoneLine}` }} onClick={() => setPending(null)}>Descartar</button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section style={{ ...S.card, marginTop: 14 }}>
+        <div style={S.cardHead}><span style={{ fontSize: 13, color: C.slate, fontFamily: F.sans }}>o agrega uno manualmente</span></div>
+        <div style={S.labGrid}>
+          <input style={S.input} placeholder="Marcador" value={form.marker} onChange={(e) => setForm({ ...form, marker: e.target.value })} />
+          <input style={S.input} placeholder="Valor" type="number" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} />
+          <input style={S.input} placeholder="Unidad" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
+          <input style={S.input} placeholder="Rango min" type="number" value={form.low} onChange={(e) => setForm({ ...form, low: e.target.value })} />
+          <input style={S.input} placeholder="Rango max" type="number" value={form.high} onChange={(e) => setForm({ ...form, high: e.target.value })} />
+        </div>
+        <button style={S.primaryBtn} onClick={add}><IconCheck size={14} /> Guardar resultado</button>
+        <p style={{ fontSize: 12, color: C.slate, marginTop: 8 }}>Esto no reemplaza la lectura de tu médico — solo guarda tendencia.</p>
+      </section>
+      <div style={{ marginTop: 18 }}>
+        {labs.length === 0 && <p style={S.empty}>Sin exámenes registrados.</p>}
+        {labs.map((l) => (
+          <div key={l.id} style={{ ...S.labRow, borderLeftColor: outOfRange(l) ? C.rust : C.verdigris }}>
+            <div>
+              <div style={{ fontFamily: F.serif, fontSize: 15, color: C.ink }}>{l.marker}</div>
+              <div style={{ fontSize: 12, color: C.slate }}>{fmtDate(l.date)}{l.low != null || l.high != null ? ` · rango ${l.low ?? "–"}–${l.high ?? "–"}` : ""}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 17, fontFamily: F.serif, color: outOfRange(l) ? C.rust : C.ink }}>{l.value} {l.unit}</span>
+              {outOfRange(l) ? <IconX size={14} color={C.rust} /> : <IconCheck size={14} color={C.verdigris} />}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- styles ----------
+const S = {
+  page: { minHeight: "100vh", background: C.stone, fontFamily: F.sans, color: C.ink, padding: "20px 16px 40px" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18, maxWidth: 720, margin: "0 auto 18px" },
+  kicker: { fontSize: 11.5, letterSpacing: 0.4, color: C.bronze, marginBottom: 2 },
+  h1: { fontFamily: F.serif, fontSize: 28, margin: 0, fontWeight: 600, color: C.ink },
+  dateBadge: { fontSize: 12, color: C.slate, textTransform: "capitalize" },
+  nav: { display: "flex", gap: 6, maxWidth: 720, margin: "0 auto 18px", borderBottom: `1px solid ${C.stoneLine}`, paddingBottom: 10, overflowX: "auto" },
+  navBtn: { display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", padding: "6px 10px", fontSize: 13, color: C.slate, cursor: "pointer", borderRadius: 5, whiteSpace: "nowrap", fontFamily: F.sans },
+  navBtnActive: { background: C.panel, color: C.ink, boxShadow: `inset 0 0 0 1px ${C.stoneLine}` },
+  main: { maxWidth: 720, margin: "0 auto" },
+  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
+  card: { background: C.panel, border: `1px solid ${C.stoneLine}`, borderRadius: 6, padding: 16 },
+  cardHead: { display: "flex", alignItems: "center", gap: 8, fontFamily: F.serif, fontSize: 16, marginBottom: 12, color: C.ink },
+  label: { display: "block", fontSize: 12, color: C.slate, marginTop: 10, marginBottom: 4 },
+  textarea: { width: "100%", boxSizing: "border-box", border: `1px solid ${C.stoneLine}`, borderRadius: 4, padding: 8, fontSize: 13.5, fontFamily: F.sans, resize: "vertical", background: "#fff", color: C.ink },
+  input: { flex: 1, border: `1px solid ${C.stoneLine}`, borderRadius: 4, padding: "8px 10px", fontSize: 13.5, fontFamily: F.sans, background: "#fff", color: C.ink },
+  primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: C.ink, color: C.stone, border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 13, marginTop: 12, cursor: "pointer", fontFamily: F.sans },
+  virtueRow: { display: "flex", gap: 6, flexWrap: "wrap" },
+  virtueChip: { border: `1px solid ${C.stoneLine}`, background: "#fff", borderRadius: 20, padding: "5px 12px", fontSize: 12.5, color: C.slate, cursor: "pointer", fontFamily: F.sans },
+  virtueChipActive: { background: C.bronze, color: "#fff", borderColor: C.bronze },
+  empty: { fontSize: 13, color: C.slate, fontStyle: "italic" },
+  mealDate: { fontSize: 12, color: C.slate, marginBottom: 6, textTransform: "capitalize" },
+  labGrid: { display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 1fr", gap: 6, marginBottom: 4 },
+  labRow: { display: "flex", justifyContent: "space-between", alignItems: "center", background: C.panel, border: `1px solid ${C.stoneLine}`, borderLeft: "3px solid", borderRadius: 4, padding: "10px 14px", marginBottom: 8 },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
