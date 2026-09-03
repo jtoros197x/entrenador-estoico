@@ -165,9 +165,11 @@ async function saveAll(key, value) {
   localStorage.setItem("estoico:" + key, str);
   try {
     await ghPutFile(`data/${key}.json`, str);
+    window.__lastSaveError = null;
     return true;
   } catch (e) {
     console.error("github save error", e);
+    window.__lastSaveError = e && e.message ? e.message : String(e);
     return false;
   }
 }
@@ -464,7 +466,7 @@ function Hoy({ checkins, setCheckins }) {
     setSaving(true);
     const ok = await saveAll("checkins", updated);
     setSaving(false);
-    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. " + (window.__lastSaveError || "Revisa tu conexión."));
   };
 
   const streak = (() => {
@@ -540,7 +542,7 @@ function Comidas({ meals, setMeals }) {
       setMeals(updated);
       setPhase("saving");
       const ok = await saveAll("meals", updated);
-      if (!ok) alert("Se analizó la foto pero no se pudo guardar en GitHub (quedó solo en este navegador). Revisa tu conexión e inténtalo de nuevo antes de cerrar.");
+      if (!ok) alert("Se analizó la foto pero no se pudo guardar en GitHub (quedó solo en este navegador). " + (window.__lastSaveError || "Revisa tu conexión."));
     } catch (err) {
       alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo analizar la foto: " + err.message);
     } finally {
@@ -592,7 +594,7 @@ function ActividadTab({ activities, setActivities }) {
       setActivities(updated);
       setPhase("saving");
       const ok = await saveAll("activities", updated);
-      if (!ok) alert("Se leyó la captura pero no se pudo guardar en GitHub (quedó solo en este navegador). Revisa tu conexión e inténtalo de nuevo antes de cerrar.");
+      if (!ok) alert("Se leyó la captura pero no se pudo guardar en GitHub (quedó solo en este navegador). " + (window.__lastSaveError || "Revisa tu conexión."));
     } catch (err) {
       alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo leer la captura: " + err.message);
     } finally {
@@ -642,7 +644,7 @@ function Progreso({ checkins, metrics, setMetrics }) {
     setSaving(true);
     const ok = await saveAll("metrics", updated);
     setSaving(false);
-    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. " + (window.__lastSaveError || "Revisa tu conexión."));
   };
   const last14 = [...checkins].sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
   const adherence = last14.map((c) => ({ date: c.date.slice(5), cumplido: (c.morningDone ? 1 : 0) + (c.eveningDone ? 1 : 0) }));
@@ -684,7 +686,7 @@ function Examenes({ labs, setLabs }) {
     setSaving(true);
     const ok = await saveAll("labs", updated);
     setSaving(false);
-    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. " + (window.__lastSaveError || "Revisa tu conexión."));
   };
 
   const onFile = async (e) => {
@@ -725,7 +727,7 @@ function Examenes({ labs, setLabs }) {
     setSaving(true);
     const ok = await saveAll("labs", updated);
     setSaving(false);
-    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. " + (window.__lastSaveError || "Revisa tu conexión."));
   };
 
   const outOfRange = (l) => (l.low != null && l.value < l.low) || (l.high != null && l.value > l.high);
