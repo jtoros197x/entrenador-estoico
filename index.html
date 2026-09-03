@@ -13,6 +13,34 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+  window.__loadErrors = [];
+  function showFatalError(msg) {
+    window.__loadErrors.push(msg);
+    var root = document.getElementById("root");
+    if (!root) return;
+    root.innerHTML =
+      '<div style="font-family:sans-serif;padding:24px;max-width:600px;margin:0 auto;color:#211F1C;background:#EDE8DC;min-height:100vh;box-sizing:border-box;">' +
+      '<h2 style="font-size:18px;">No se pudo cargar la app</h2>' +
+      '<p style="font-size:13px;color:#6B6558;">Copia este mensaje y compártelo para poder corregirlo:</p>' +
+      '<pre style="white-space:pre-wrap;background:#fff;border:1px solid #D9D2C2;border-radius:6px;padding:12px;font-size:12px;">' +
+      window.__loadErrors.join("\n---\n").replace(/</g, "&lt;") +
+      '</pre></div>';
+  }
+  window.addEventListener("error", function (e) {
+    showFatalError((e.message || "error") + (e.filename ? " @ " + e.filename + ":" + e.lineno : ""));
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    showFatalError("Promise rechazada: " + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
+  });
+  // If nothing has rendered into #root after 6s, something silently failed to load (e.g. a blocked CDN script).
+  setTimeout(function () {
+    var root = document.getElementById("root");
+    if (root && root.innerHTML.trim() === "") {
+      showFatalError("La app no terminó de cargar en 6 segundos. Es probable que uno de estos recursos externos esté bloqueado en tu red: unpkg.com (React/Babel) o fonts.googleapis.com.");
+    }
+  }, 6000);
+</script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; }
