@@ -27,19 +27,17 @@
       window.__loadErrors.join("\n---\n").replace(/</g, "&lt;") +
       '</pre></div>';
   }
-  window.addEventListener("error", function (e) {
-    showFatalError((e.message || "error") + (e.filename ? " @ " + e.filename + ":" + e.lineno : ""));
-  });
-  window.addEventListener("unhandledrejection", function (e) {
-    showFatalError("Promise rechazada: " + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
-  });
-  // If nothing has rendered into #root after 6s, something silently failed to load (e.g. a blocked CDN script).
+  // Only treat "root stayed empty" as fatal — this is the reliable signal.
+  // We deliberately do NOT hook window 'error'/'unhandledrejection' globally:
+  // browser extensions (translate, password managers, ad blockers) fire
+  // unrelated JS errors on almost every page, and those false positives
+  // would hide a perfectly working app behind this error screen.
   setTimeout(function () {
     var root = document.getElementById("root");
     if (root && root.innerHTML.trim() === "") {
-      showFatalError("La app no terminó de cargar en 6 segundos. Es probable que uno de estos recursos externos esté bloqueado en tu red: unpkg.com (React/Babel) o fonts.googleapis.com.");
+      showFatalError("La app no terminó de cargar en 8 segundos. Es probable que uno de estos recursos externos esté bloqueado en tu red: unpkg.com (React/Babel) o fonts.googleapis.com. Revisa la consola del navegador (menú ⋮ → Más herramientas → Herramientas de desarrollador → Console) para el error exacto.");
     }
-  }, 6000);
+  }, 8000);
 </script>
 <style>
   * { box-sizing: border-box; }
