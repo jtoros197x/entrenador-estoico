@@ -186,17 +186,30 @@ function getApiKey() {
   }
   return k;
 }
+function getWorkspaceId(promptIfMissing) {
+  let w = localStorage.getItem("estoico:wsId");
+  if (w === null && promptIfMissing) {
+    w = window.prompt("Tu API key requiere un ID de workspace (empieza con 'wrkspc_'). Lo encuentras en console.anthropic.com → Settings → Workspaces. Si no aplica, deja vacío:") || "";
+    localStorage.setItem("estoico:wsId", w);
+  }
+  return w || "";
+}
+function resetApiCreds() {
+  localStorage.removeItem("estoico:apiKey");
+  localStorage.removeItem("estoico:wsId");
+}
 
 async function claudeVision(base64, mediaType, prompt) {
   const key = getApiKey();
   if (!key) throw new Error("no-key");
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const doCall = (wsId) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": key,
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
+      ...(wsId ? { "anthropic-workspace-id": wsId } : {}),
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
@@ -207,7 +220,14 @@ async function claudeVision(base64, mediaType, prompt) {
       ]}],
     }),
   });
-  const data = await res.json();
+  let res = await doCall(getWorkspaceId(false));
+  let data = await res.json();
+  if (data.error && /workspace/i.test(data.error.message || "")) {
+    // key needs a workspace id we don't have yet — ask once, then retry
+    const wsId = getWorkspaceId(true);
+    res = await doCall(wsId);
+    data = await res.json();
+  }
   if (data.error) throw new Error(data.error.message || "error API");
   return (data.content || []).filter(c => c.type === "text").map(c => c.text).join("\n");
 }
