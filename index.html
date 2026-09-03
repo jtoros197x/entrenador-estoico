@@ -406,8 +406,12 @@ function App() {
         <div style={{ textAlign: "right" }}>
           <div style={S.dateBadge}>{fmtDate(todayISO())}</div>
           <button onClick={() => { resetGhConfig(); ghConfig(); window.location.reload(); }}
-            style={{ background: "none", border: "none", padding: 0, marginTop: 4, fontSize: 11, color: syncOk ? C.verdigris : C.rust, cursor: "pointer", fontFamily: F.sans }}>
+            style={{ background: "none", border: "none", padding: 0, marginTop: 4, fontSize: 11, color: syncOk ? C.verdigris : C.rust, cursor: "pointer", fontFamily: F.sans, display: "block", marginLeft: "auto" }}>
             {syncOk === null ? "verificando sincronización…" : syncOk ? "☁ sincronizado con GitHub" : "⚠ sin sincronizar — toca para configurar"}
+          </button>
+          <button onClick={() => { resetApiCreds(); alert("Credenciales de API borradas. La próxima foto que subas te las pedirá de nuevo."); }}
+            style={{ background: "none", border: "none", padding: 0, marginTop: 2, fontSize: 11, color: C.slate, cursor: "pointer", fontFamily: F.sans, display: "block", marginLeft: "auto" }}>
+            restablecer API key
           </button>
         </div>
       </header>
