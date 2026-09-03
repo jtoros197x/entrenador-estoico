@@ -182,17 +182,18 @@ function getApiKey() {
   let k = localStorage.getItem("estoico:apiKey");
   if (!k) {
     k = window.prompt("Pega tu API key de Anthropic para habilitar el análisis de fotos (se guarda solo en este navegador):");
-    if (k) localStorage.setItem("estoico:apiKey", k);
+    if (k) { k = k.trim(); localStorage.setItem("estoico:apiKey", k); }
   }
-  return k;
+  return k ? k.trim() : k;
 }
 function getWorkspaceId(promptIfMissing) {
   let w = localStorage.getItem("estoico:wsId");
   if (w === null && promptIfMissing) {
     w = window.prompt("Tu API key requiere un ID de workspace (empieza con 'wrkspc_'). Lo encuentras en console.anthropic.com → Settings → Workspaces. Si no aplica, deja vacío:") || "";
+    w = w.trim();
     localStorage.setItem("estoico:wsId", w);
   }
-  return w || "";
+  return (w || "").trim();
 }
 function resetApiCreds() {
   localStorage.removeItem("estoico:apiKey");
