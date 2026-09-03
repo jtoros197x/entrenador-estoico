@@ -66,7 +66,13 @@ const C = {
 };
 const F = { serif: "'Source Serif 4', Georgia, serif", sans: "'IBM Plex Sans', system-ui, sans-serif" };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 const fmtDate = (iso) => {
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
@@ -448,13 +454,17 @@ function Hoy({ checkins, setCheckins }) {
     eveningWentWell: "", eveningFailed: "", eveningFix: "", eveningDone: false,
   };
   const [form, setForm] = useState(existing);
+  const [saving, setSaving] = useState(false);
 
-  const persist = (next) => {
+  const persist = async (next) => {
     const others = checkins.filter((c) => c.date !== today);
     const updated = [...others, next].sort((a, b) => a.date.localeCompare(b.date));
     setCheckins(updated);
-    saveAll("checkins", updated);
     setForm(next);
+    setSaving(true);
+    const ok = await saveAll("checkins", updated);
+    setSaving(false);
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
   };
 
   const streak = (() => {
@@ -487,7 +497,7 @@ function Hoy({ checkins, setCheckins }) {
         <textarea style={S.textarea} rows={2} value={form.mealPlan} onChange={(e) => setForm({ ...form, mealPlan: e.target.value })} placeholder="Sin azúcar añadida ni frituras" />
         <label style={S.label}>Bloque de ejercicio de hoy</label>
         <textarea style={S.textarea} rows={2} value={form.exercisePlan} onChange={(e) => setForm({ ...form, exercisePlan: e.target.value })} placeholder="Fuerza / cardio, duración" />
-        <button style={S.primaryBtn} onClick={() => persist({ ...form, morningDone: true })}><IconCheck size={14} /> Registrar mañana</button>
+        <button style={S.primaryBtn} onClick={() => persist({ ...form, morningDone: true })}><IconCheck size={14} /> {saving ? "Guardando…" : "Registrar mañana"}</button>
       </section>
 
       <section style={S.card}>
@@ -498,7 +508,7 @@ function Hoy({ checkins, setCheckins }) {
         <textarea style={S.textarea} rows={2} value={form.eveningFailed} onChange={(e) => setForm({ ...form, eveningFailed: e.target.value })} />
         <label style={S.label}>Qué corriges mañana</label>
         <textarea style={S.textarea} rows={2} value={form.eveningFix} onChange={(e) => setForm({ ...form, eveningFix: e.target.value })} />
-        <button style={S.primaryBtn} onClick={() => persist({ ...form, eveningDone: true })}><IconCheck size={14} /> Cerrar el día</button>
+        <button style={S.primaryBtn} onClick={() => persist({ ...form, eveningDone: true })}><IconCheck size={14} /> {saving ? "Guardando…" : "Cerrar el día"}</button>
       </section>
 
       <section style={{ ...S.card, gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 14 }}>
@@ -514,24 +524,27 @@ function Hoy({ checkins, setCheckins }) {
 
 // ---------- Comidas ----------
 function Comidas({ meals, setMeals }) {
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState("idle");
   const inputRef = useRef(null);
 
   const onFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setBusy(true);
+    setPhase("reading");
     try {
       const base64 = await fileToBase64(file);
       const analysis = await claudeVision(base64, file.type || "image/jpeg",
         "Analiza esta foto de comida. Responde en español, breve: 1) qué alimentos identificas, 2) calidad nutricional aproximada (alta/media/baja) y por qué, 3) si hay azúcares añadidos o frituras, 4) una sugerencia de mejora. Texto plano.");
       const entry = { id: Date.now(), date: todayISO(), analysis };
       const updated = [entry, ...meals];
-      setMeals(updated); saveAll("meals", updated);
+      setMeals(updated);
+      setPhase("saving");
+      const ok = await saveAll("meals", updated);
+      if (!ok) alert("Se analizó la foto pero no se pudo guardar en GitHub (quedó solo en este navegador). Revisa tu conexión e inténtalo de nuevo antes de cerrar.");
     } catch (err) {
       alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo analizar la foto: " + err.message);
     } finally {
-      setBusy(false);
+      setPhase("idle");
       if (inputRef.current) inputRef.current.value = "";
     }
   };
@@ -543,9 +556,10 @@ function Comidas({ meals, setMeals }) {
         <p style={{ fontSize: 13, color: C.slate, marginTop: -4 }}>Se analiza al momento — no se guarda la imagen, solo el resultado.</p>
         <input ref={inputRef} type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} id="meal-upload" />
         <label htmlFor="meal-upload" style={{ ...S.primaryBtn, cursor: "pointer", width: "fit-content" }}>
-          {busy ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
-          {busy ? "Analizando…" : "Subir foto"}
+          {phase !== "idle" ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
+          {phase === "reading" ? "Analizando…" : phase === "saving" ? "Guardando en GitHub…" : "Subir foto"}
         </label>
+        {phase === "saving" && <p style={{ fontSize: 11.5, color: C.rust, marginTop: 6 }}>No cierres todavía — falta confirmar el guardado.</p>}
       </section>
       <div style={{ marginTop: 18 }}>
         {meals.length === 0 && <p style={S.empty}>Aún no hay comidas registradas.</p>}
@@ -562,24 +576,27 @@ function Comidas({ meals, setMeals }) {
 
 // ---------- Actividad ----------
 function ActividadTab({ activities, setActivities }) {
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState("idle"); // idle | reading | saving
   const inputRef = useRef(null);
 
   const onScreenshot = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setBusy(true);
+    setPhase("reading");
     try {
       const base64 = await fileToBase64(file);
       const analysis = await claudeVision(base64, file.type || "image/jpeg",
         "Captura de una app de salud (Garmin o Google Health). Extrae en español: pasos, frecuencia cardiaca, horas de sueño, calorías activas, actividad registrada con duración. Si un dato no aparece dilo. Texto plano.");
       const entry = { id: Date.now(), date: todayISO(), source: "pantallazo", summary: analysis };
       const updated = [entry, ...activities];
-      setActivities(updated); saveAll("activities", updated);
+      setActivities(updated);
+      setPhase("saving");
+      const ok = await saveAll("activities", updated);
+      if (!ok) alert("Se leyó la captura pero no se pudo guardar en GitHub (quedó solo en este navegador). Revisa tu conexión e inténtalo de nuevo antes de cerrar.");
     } catch (err) {
       alert(err.message === "no-key" ? "Necesitas una API key de Anthropic para esta función." : "No se pudo leer la captura: " + err.message);
     } finally {
-      setBusy(false);
+      setPhase("idle");
       if (inputRef.current) inputRef.current.value = "";
     }
   };
@@ -593,9 +610,10 @@ function ActividadTab({ activities, setActivities }) {
         </p>
         <input ref={inputRef} type="file" accept="image/*" onChange={onScreenshot} style={{ display: "none" }} id="act-upload" />
         <label htmlFor="act-upload" style={{ ...S.primaryBtn, cursor: "pointer", width: "fit-content" }}>
-          {busy ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
-          {busy ? "Leyendo…" : "Subir captura"}
+          {phase !== "idle" ? <span className="spin"><IconLoader size={14} /></span> : <IconUpload size={14} />}
+          {phase === "reading" ? "Leyendo…" : phase === "saving" ? "Guardando en GitHub…" : "Subir captura"}
         </label>
+        {phase === "saving" && <p style={{ fontSize: 11.5, color: C.rust, marginTop: 6 }}>No cierres todavía — falta confirmar el guardado.</p>}
       </section>
       <div style={{ marginTop: 18 }}>
         {activities.length === 0 && <p style={S.empty}>Aún no hay actividad registrada.</p>}
@@ -613,13 +631,18 @@ function ActividadTab({ activities, setActivities }) {
 // ---------- Progreso ----------
 function Progreso({ checkins, metrics, setMetrics }) {
   const [weight, setWeight] = useState("");
-  const addWeight = () => {
+  const [saving, setSaving] = useState(false);
+  const addWeight = async () => {
     if (!weight) return;
     const entry = { date: todayISO(), weight: parseFloat(weight) };
     const others = metrics.filter((m) => m.date !== entry.date);
     const updated = [...others, entry].sort((a, b) => a.date.localeCompare(b.date));
-    setMetrics(updated); saveAll("metrics", updated);
+    setMetrics(updated);
     setWeight("");
+    setSaving(true);
+    const ok = await saveAll("metrics", updated);
+    setSaving(false);
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
   };
   const last14 = [...checkins].sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
   const adherence = last14.map((c) => ({ date: c.date.slice(5), cumplido: (c.morningDone ? 1 : 0) + (c.eveningDone ? 1 : 0) }));
@@ -631,7 +654,7 @@ function Progreso({ checkins, metrics, setMetrics }) {
         <div style={S.cardHead}><IconTrend size={16} color={C.bronze} /><span>Peso</span></div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <input style={S.input} type="number" step="0.1" placeholder="kg hoy" value={weight} onChange={(e) => setWeight(e.target.value)} />
-          <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={addWeight}>Guardar</button>
+          <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={addWeight}>{saving ? "Guardando…" : "Guardar"}</button>
         </div>
         <LineChartSVG data={weightData} valueKey="weight" color={C.bronze} />
       </section>
@@ -647,16 +670,21 @@ function Progreso({ checkins, metrics, setMetrics }) {
 function Examenes({ labs, setLabs }) {
   const [form, setForm] = useState({ marker: "", value: "", unit: "", low: "", high: "" });
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState(null);
   const inputRef = useRef(null);
 
-  const add = () => {
+  const add = async () => {
     if (!form.marker || !form.value) return;
     const entry = { id: Date.now(), date: todayISO(), marker: form.marker, value: parseFloat(form.value), unit: form.unit,
       low: form.low ? parseFloat(form.low) : null, high: form.high ? parseFloat(form.high) : null };
     const updated = [entry, ...labs];
-    setLabs(updated); saveAll("labs", updated);
+    setLabs(updated);
     setForm({ marker: "", value: "", unit: "", low: "", high: "" });
+    setSaving(true);
+    const ok = await saveAll("labs", updated);
+    setSaving(false);
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
   };
 
   const onFile = async (e) => {
@@ -688,12 +716,16 @@ function Examenes({ labs, setLabs }) {
     }
   };
 
-  const confirmPending = () => {
+  const confirmPending = async () => {
     const date = todayISO();
     const entries = pending.map((m, i) => ({ id: Date.now() + i, date, marker: m.marker, value: m.value, unit: m.unit || "", low: m.low ?? null, high: m.high ?? null }));
     const updated = [...entries, ...labs];
-    setLabs(updated); saveAll("labs", updated);
+    setLabs(updated);
     setPending(null);
+    setSaving(true);
+    const ok = await saveAll("labs", updated);
+    setSaving(false);
+    if (!ok) alert("No se pudo guardar en GitHub — quedó solo en este navegador. Revisa tu conexión.");
   };
 
   const outOfRange = (l) => (l.low != null && l.value < l.low) || (l.high != null && l.value > l.high);
@@ -717,7 +749,7 @@ function Examenes({ labs, setLabs }) {
               </div>
             ))}
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={confirmPending}><IconCheck size={14} /> Guardar todos</button>
+              <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={confirmPending}><IconCheck size={14} /> {saving ? "Guardando…" : "Guardar todos"}</button>
               <button style={{ ...S.primaryBtn, marginTop: 0, background: "transparent", color: C.slate, border: `1px solid ${C.stoneLine}` }} onClick={() => setPending(null)}>Descartar</button>
             </div>
           </div>
@@ -733,7 +765,7 @@ function Examenes({ labs, setLabs }) {
           <input style={S.input} placeholder="Rango min" type="number" value={form.low} onChange={(e) => setForm({ ...form, low: e.target.value })} />
           <input style={S.input} placeholder="Rango max" type="number" value={form.high} onChange={(e) => setForm({ ...form, high: e.target.value })} />
         </div>
-        <button style={S.primaryBtn} onClick={add}><IconCheck size={14} /> Guardar resultado</button>
+        <button style={S.primaryBtn} onClick={add}><IconCheck size={14} /> {saving ? "Guardando…" : "Guardar resultado"}</button>
         <p style={{ fontSize: 12, color: C.slate, marginTop: 8 }}>Esto no reemplaza la lectura de tu médico — solo guarda tendencia.</p>
       </section>
       <div style={{ marginTop: 18 }}>
