@@ -10,9 +10,9 @@
 <meta name="theme-color" content="#211F1C">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" onerror="window.__cdnFail=(window.__cdnFail||[]).concat('React (cdnjs) no cargó')"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" onerror="window.__cdnFail=(window.__cdnFail||[]).concat('ReactDOM (cdnjs) no cargó')"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.3/babel.min.js" onerror="window.__cdnFail=(window.__cdnFail||[]).concat('Babel (cdnjs) no cargó')"></script>
 <script>
   window.__loadErrors = [];
   function showFatalError(msg) {
@@ -35,7 +35,10 @@
   setTimeout(function () {
     var root = document.getElementById("root");
     if (root && root.innerHTML.trim() === "") {
-      showFatalError("La app no terminó de cargar en 8 segundos. Es probable que uno de estos recursos externos esté bloqueado en tu red: unpkg.com (React/Babel) o fonts.googleapis.com. Revisa la consola del navegador (menú ⋮ → Más herramientas → Herramientas de desarrollador → Console) para el error exacto.");
+      var cdnMsg = (window.__cdnFail && window.__cdnFail.length)
+        ? "Recursos que no cargaron: " + window.__cdnFail.join(", ") + ". Estos dominios podrían estar bloqueados en tu red."
+        : "Los recursos externos (React/Babel) sí cargaron, pero la app no se montó. Revisa la consola del navegador (menú ⋮ → Más herramientas → Herramientas de desarrollador → Console) para el error exacto.";
+      showFatalError("La app no terminó de cargar en 8 segundos. " + cdnMsg);
     }
   }, 8000);
 </script>
