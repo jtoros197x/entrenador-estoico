@@ -86,21 +86,40 @@ const VIRTUES = [
 ];
 
 // ---------- GitHub-backed sync (works across your devices via your own repo) ----------
+function looksLikeToken(s) {
+  return /^(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)/i.test(s || "");
+}
 function ghConfig() {
   let token = localStorage.getItem("estoico:ghToken");
   let owner = localStorage.getItem("estoico:ghOwner");
   let repo = localStorage.getItem("estoico:ghRepo");
   if (!token) {
-    token = window.prompt("Pega tu GitHub Personal Access Token (permiso 'Contents: Read and write' sobre este repositorio):");
+    token = window.prompt("PASO 1 de 3 — Pega tu GitHub Personal Access Token (empieza con 'github_pat_' o 'ghp_'):");
     if (token) { token = token.trim(); localStorage.setItem("estoico:ghToken", token); }
   }
   if (!owner) {
-    owner = window.prompt("Usuario/organización dueño del repositorio (ej. jtoros197x):");
-    if (owner) { owner = owner.trim(); localStorage.setItem("estoico:ghOwner", owner); }
+    owner = window.prompt("PASO 2 de 3 — Escribe tu usuario de GitHub (NO el token; ej. jtoros197x):");
+    if (owner) {
+      owner = owner.trim();
+      if (looksLikeToken(owner)) {
+        alert("Eso parece ser el token, no tu usuario. Vuelve a intentarlo y escribe solo tu nombre de usuario de GitHub.");
+        owner = null;
+      } else {
+        localStorage.setItem("estoico:ghOwner", owner);
+      }
+    }
   }
   if (!repo) {
-    repo = window.prompt("Nombre del repositorio (ej. entrenador-estoico):");
-    if (repo) { repo = repo.trim(); localStorage.setItem("estoico:ghRepo", repo); }
+    repo = window.prompt("PASO 3 de 3 — Nombre del repositorio (ej. entrenador-estoico):");
+    if (repo) {
+      repo = repo.trim();
+      if (looksLikeToken(repo)) {
+        alert("Eso parece ser el token, no el nombre del repositorio. Vuelve a intentarlo.");
+        repo = null;
+      } else {
+        localStorage.setItem("estoico:ghRepo", repo);
+      }
+    }
   }
   return { token: token && token.trim(), owner: owner && owner.trim(), repo: repo && repo.trim() };
 }
@@ -377,6 +396,7 @@ const IconCamera = (p) => <Icon {...p}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1
 const IconFlame = (p) => <Icon {...p}><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></Icon>;
 const IconChevron = (p) => <Icon {...p}><polyline points="9 18 15 12 9 6"/></Icon>;
 const IconLoader = (p) => <Icon {...p}><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></Icon>;
+const IconExport = (p) => <Icon {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></Icon>;
 
 // ---------- App shell ----------
 function App() {
@@ -417,6 +437,7 @@ function App() {
     { key: "actividad", label: "Actividad", Icon: IconActivity },
     { key: "progreso", label: "Progreso", Icon: IconTrend },
     { key: "examenes", label: "Exámenes", Icon: IconLab },
+    { key: "exportar", label: "Exportar", Icon: IconExport },
   ];
 
   return (
@@ -460,6 +481,7 @@ function App() {
         {tab === "actividad" && <ActividadTab activities={activities} setActivities={setActivities} />}
         {tab === "progreso" && <Progreso checkins={checkins} metrics={metrics} setMetrics={setMetrics} />}
         {tab === "examenes" && <Examenes labs={labs} setLabs={setLabs} />}
+        {tab === "exportar" && <Exportar checkins={checkins} meals={meals} activities={activities} metrics={metrics} labs={labs} />}
       </main>
     </div>
   );
@@ -802,6 +824,94 @@ function Examenes({ labs, setLabs }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---------- Exportar ----------
+function Exportar({ checkins, meals, activities, metrics, labs }) {
+  const [days, setDays] = useState(14);
+  const [copied, setCopied] = useState(false);
+
+  const cutoff = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d.toISOString().slice(0, 10);
+  })();
+  const within = (dateStr) => dateStr >= cutoff;
+
+  const text = (() => {
+    const lines = [];
+    lines.push(`Resumen de Entrenador Estoico — últimos ${days} días (generado ${fmtDate(todayISO())})`);
+
+    const ci = checkins.filter((c) => within(c.date)).sort((a, b) => a.date.localeCompare(b.date));
+    if (ci.length) {
+      lines.push("\n## Check-ins");
+      ci.forEach((c) => {
+        lines.push(`- ${c.date} | virtud: ${c.virtue || "—"} | comida: ${c.mealPlan || "—"} | ejercicio: ${c.exercisePlan || "—"}${c.eveningWentWell ? ` | bien: ${c.eveningWentWell}` : ""}${c.eveningFailed ? ` | falló: ${c.eveningFailed}` : ""}`);
+      });
+    }
+
+    const me = metrics.filter((m) => within(m.date)).sort((a, b) => a.date.localeCompare(b.date));
+    if (me.length) {
+      lines.push("\n## Peso");
+      me.forEach((m) => lines.push(`- ${m.date}: ${m.weight} kg`));
+    }
+
+    const ac = activities.filter((a) => within(a.date)).sort((a, b) => a.date.localeCompare(b.date));
+    if (ac.length) {
+      lines.push("\n## Actividad física");
+      ac.forEach((a) => lines.push(`- ${a.date} (${a.source}): ${a.summary.replace(/\n+/g, " ")}`));
+    }
+
+    const ml = meals.filter((m) => within(m.date)).sort((a, b) => a.date.localeCompare(b.date));
+    if (ml.length) {
+      lines.push("\n## Comidas registradas");
+      ml.forEach((m) => lines.push(`- ${m.date}: ${m.analysis.replace(/\n+/g, " ")}`));
+    }
+
+    const lb = labs.filter((l) => within(l.date)).sort((a, b) => a.date.localeCompare(b.date));
+    if (lb.length) {
+      lines.push("\n## Exámenes de laboratorio");
+      lb.forEach((l) => lines.push(`- ${l.date}: ${l.marker} = ${l.value} ${l.unit}${(l.low != null || l.high != null) ? ` (rango ${l.low ?? "–"}–${l.high ?? "–"})` : ""}`));
+    }
+
+    if (lines.length === 1) lines.push("\n(No hay datos registrados en este rango.)");
+    return lines.join("\n");
+  })();
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      alert("No se pudo copiar automáticamente. Selecciona el texto de abajo y cópialo manualmente.");
+    }
+  };
+
+  return (
+    <div>
+      <section style={S.card}>
+        <div style={S.cardHead}><IconExport size={16} color={C.bronze} /><span>Exportar para analizar en el chat con Claude</span></div>
+        <p style={{ fontSize: 13, color: C.slate, marginTop: -4 }}>
+          Copia este resumen y pégalo en tu conversación con Claude para pedir una revisión de conjunto,
+          opinión sobre tus exámenes o sugerencias de rutina. Claude no reemplaza a un médico.
+        </p>
+        <label style={S.label}>Rango de días</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          {[7, 14, 30, 90].map((n) => (
+            <button key={n} onClick={() => setDays(n)}
+              style={{ ...S.virtueChip, ...(days === n ? S.virtueChipActive : {}) }}>{n}d</button>
+          ))}
+        </div>
+        <button style={S.primaryBtn} onClick={copy}>
+          {copied ? <IconCheck size={14} /> : <IconExport size={14} />}
+          {copied ? "Copiado" : "Copiar resumen"}
+        </button>
+        <textarea readOnly value={text} rows={12}
+          style={{ ...S.textarea, marginTop: 14, fontFamily: "monospace", fontSize: 11.5 }} />
+      </section>
     </div>
   );
 }
